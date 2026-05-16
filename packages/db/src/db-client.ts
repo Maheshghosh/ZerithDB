@@ -196,7 +196,17 @@ export class CollectionClient<T extends Record<string, any> = Record<string, any
         continue;
       }
 
+      // Distinguish operator objects ({ $gt: 3 }) from plain object values ({ key: "v" }).
+      // Only treat as operators if at least one key starts with "$".
       const conditions = condition as Record<string, any>;
+      const isOperatorObject = Object.keys(conditions).some((k) => k.startsWith("$"));
+
+      if (!isOperatorObject) {
+        // Deep equality check for plain object / array values
+        if (JSON.stringify(fieldValue) !== JSON.stringify(condition)) return false;
+        continue;
+      }
+
       if ("$eq" in conditions && fieldValue !== conditions["$eq"]) return false;
       if ("$ne" in conditions && fieldValue === conditions["$ne"]) return false;
       if ("$gt" in conditions && !((fieldValue as any) > (conditions["$gt"] as never))) return false;
