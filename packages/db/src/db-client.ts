@@ -211,7 +211,6 @@ export class CollectionClient<T extends Record<string, any> = Record<string, any
 
     next._id = doc._id;
     next._createdAt = doc._createdAt;
-    next._updatedAt = updatedAt;
 
     return next as Document<T>;
   }
