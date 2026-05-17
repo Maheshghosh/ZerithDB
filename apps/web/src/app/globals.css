@@ -1,6 +1,7 @@
 @import "tailwindcss";
 
-@theme {
+@layer base {
+  :root {
   /* Fonts */
   --font-sans:
     var(--font-inter),
@@ -36,12 +37,13 @@
 
   /* Blur */
   --blur-glass: blur(16px);
+  }
 }
 
 @layer base {
 
   * {
-    @apply border-border;
+    border-color: var(--color-border);
   }
 
   html {
@@ -49,13 +51,12 @@
   }
 
   body {
-
-    @apply
-      bg-background
-      text-foreground
-      font-sans
-      antialiased
-      overflow-x-hidden;
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overflow-x: hidden;
+    background-color: var(--color-background);
 
     background:
       radial-gradient(
@@ -73,12 +74,16 @@
     min-height: 100vh;
 
     perspective: 1200px;
+  }
 
-    selection-color: white;
+  body::selection {
+    color: white;
+    background: rgba(255,255,255,0.1);
   }
 
   h1, h2, h3 {
-    @apply font-bold tracking-tight;
+    font-weight: 700;
+    letter-spacing: -0.025em;
   }
 }
 
