@@ -80,7 +80,9 @@
   h1, h2, h3 {
     @apply font-bold tracking-tight;
   }
-}
+  .dark {
+  --color-background: var(--color-background-dark);
+  --color-foreground: var(--color-foreground-dark);
 
 
 @layer components {
