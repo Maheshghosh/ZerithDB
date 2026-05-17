@@ -17,7 +17,6 @@ matters enormously.
 - [Pull Request Checklist](#pull-request-checklist)
 - [Release Process](#release-process)
 - [Getting Help](#getting-help)
-
 ---
 
 ## Code of Conduct
