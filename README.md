@@ -20,6 +20,24 @@
 
 ---
 
+## Table of Contents
+
+* [What is ZerithDB?](#what-is-zerithdb)
+* [Why ZerithDB?](#why-zerithdb)
+* [The 30-Second Demo](#the-30-second-demo)
+* [Features](#features)
+* [Quick Start](#quick-start)
+* [Architecture in One Diagram](#architecture-in-one-diagram)
+* [Packages](#packages)
+* [CLI Reference](#cli-reference)
+* [FAQ](#faq)
+* [Roadmap](#roadmap)
+* [Contributing](#contributing)
+* [Community](#community)
+* [License](#license)
+
+---
+
 ## What is ZerithDB?
 
 ZerithDB is a **local-first, peer-to-peer application platform** that eliminates the need for
