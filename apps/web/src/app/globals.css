@@ -85,7 +85,9 @@
     font-weight: 700;
     letter-spacing: -0.025em;
   }
-}
+  .dark {
+  --color-background: var(--color-background-dark);
+  --color-foreground: var(--color-foreground-dark);
 
 
 @layer components {
@@ -393,4 +395,3 @@
         scale(1.1);
     }
   }
-}
