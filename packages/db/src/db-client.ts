@@ -249,14 +249,28 @@ export class CollectionClient<T extends Record<string, any> = Record<string, any
         return false;
       if ("$nin" in conditions && (conditions["$nin"] as unknown[]).includes(fieldValue))
         return false;
-      if ("$regex" in conditions) {
-        let re = conditions["$regex"];
-        if (typeof fieldValue !== "string") return false;
-        if (!(re instanceof RegExp)) {
-          re = new RegExp(re);
+      if ("$exists" in conditions) {
+        const exists = key in doc;
+
+        if (conditions.$exists !== exists) {
+          return false;
         }
-        re.lastIndex = 0;
-        if (!re.test(fieldValue)) return false;
+      }
+      if ("$regex" in conditions) {
+        if (typeof fieldValue !== "string") {
+          return false;
+        }
+
+        const regex =
+          conditions.$regex instanceof RegExp
+            ? conditions.$regex
+            : new RegExp(conditions.$regex);
+
+        regex.lastIndex = 0;
+
+        if (!regex.test(fieldValue)) {
+          return false;
+        }
       }
     }
     return true;
