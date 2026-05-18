@@ -59,6 +59,12 @@ export interface AuthConfig {
    * @default "__zerithdb_identity"
    */
   storageKey?: string;
+
+  /**
+   * URL of the shared wallet iframe for cross-origin identity management.
+   * Required when using WalletProxy instead of local AuthManager.
+   */
+  walletUrl?: string;
 }
 
 export interface DebugConfig {
