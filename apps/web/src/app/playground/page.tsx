@@ -847,6 +847,59 @@ function reconcileClients(clients: Client[]) {
   return { changed, mergedNotes, syncedClients };
 }
 
+function sanitizeTimestamp(value: number, now = Date.now()): number {
+  if (!Number.isFinite(value) || value < 0) return 0;
+  return Math.min(Math.floor(value), now + MAX_TIMESTAMP_SKEW_MS);
+}
+
+function sortNotesByTimestamp(notes: Note[]): Note[] {
+  return [...notes].sort((a, b) => a.timestamp - b.timestamp);
+}
+
+function reconcileClients(clients: Client[]) {
+  const latestClearTimestamp = clients.reduce(
+    (maxClearTimestamp, client) =>
+      Math.max(maxClearTimestamp, sanitizeTimestamp(client.lastClearedAt)),
+    0
+  );
+
+  const allNotesMap = new Map<string, Note>();
+
+  clients.forEach((client) => {
+    client.notes.forEach((note) => {
+      const noteTimestamp = sanitizeTimestamp(note.timestamp);
+      if (noteTimestamp <= latestClearTimestamp) return;
+
+      const existing = allNotesMap.get(note.id);
+      if (!existing || noteTimestamp > existing.timestamp) {
+        allNotesMap.set(note.id, { ...note, timestamp: noteTimestamp });
+      }
+    });
+  });
+
+  const mergedNotes = sortNotesByTimestamp(Array.from(allNotesMap.values()));
+
+  let changed = false;
+  const syncedClients = clients.map((client) => {
+    const sanitizedClientNotes = sortNotesByTimestamp(
+      client.notes
+        .map((note) => ({ ...note, timestamp: sanitizeTimestamp(note.timestamp) }))
+        .filter((note) => note.timestamp > latestClearTimestamp)
+    );
+    const notesChanged = JSON.stringify(sanitizedClientNotes) !== JSON.stringify(mergedNotes);
+    const clearChanged = sanitizeTimestamp(client.lastClearedAt) !== latestClearTimestamp;
+
+    if (notesChanged || clearChanged) {
+      changed = true;
+      return { ...client, notes: mergedNotes, lastClearedAt: latestClearTimestamp };
+    }
+
+    return client;
+  });
+
+  return { changed, mergedNotes, syncedClients };
+}
+
 // Separate component for better scalability and cleaner code
 function ClientCard({
   client,
@@ -1303,4 +1356,3 @@ export default function PlaygroundPage() {
     </div>
   );
 }
-/*added clear chat functional in offline-mode */
