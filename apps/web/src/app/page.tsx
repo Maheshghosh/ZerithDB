@@ -117,20 +117,17 @@ export default function LandingPage() {
             </motion.div>
             <span className="font-semibold text-xl tracking-tight">ZerithDB</span>
           </div>
-          <nav
-            aria-label="Main navigation"
-            className="hidden lg:flex items-center gap-5 xl:gap-8 text-sm font-medium text-muted-foreground"
-          >
+          <nav className="hidden lg:flex items-center gap-5 xl:gap-8 text-sm font-medium text-muted-foreground">
             <Link href="/docs" className="hover:text-foreground transition-colors font-medium">
               Docs
             </Link>
-            <Link href="/docs" className="hover:text-black dark:hover:text-white transition-colors font-medium">
+            <Link href="#features" className="hover:text-foreground transition-colors">
               Features
             </Link>
-            <Link href="/docs" className="hover:text-black dark:hover:text-white transition-colors font-medium">
+            <Link href="#how-it-works" className="hover:text-foreground transition-colors">
               How it works
             </Link>
-            <Link href="/docs" className="hover:text-black dark:hover:text-white transition-colors font-medium">
+            <Link href="#compare" className="hover:text-foreground transition-colors">
               Compare
             </Link>
             <Link

@@ -1210,7 +1210,7 @@ export default function PlaygroundPage() {
         <div className="flex items-center gap-2 md:gap-4 flex-wrap min-w-0">
           <Link
             href="/"
-            className="text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1.5 text-sm font-medium shrink-0 group"
+            className="text-gray-500 hover:text-foreground transition-colors flex items-center gap-1.5 text-sm font-medium shrink-0 group"
           >
             <ArrowLeft className="w-3.5 h-3.5 shrink-0 group-hover:-translate-x-0.5 transition-transform" />
             <span className="truncate">Back</span>
