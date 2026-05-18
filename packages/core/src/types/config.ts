@@ -42,23 +42,17 @@ updateThrottleMs?: number;
  */
 transport?: "auto" | "websocket" | "polling";
 
-  /**
-   * Configuration for the {@link EphemeralStateManager}.
-   * Controls broadcast throttling and stale-peer cleanup timing.
-   */
-  transport?: "auto" | "websocket" | "polling";
+/**
+ * Configuration options for low-latency ephemeral sync state.
+ */
+ephemeral?: EphemeralConfig;
+}
 
-  /**
-   * Configuration options for the ephemeral (non-persistent) state sync channel.
-   */
-  ephemeral?: {
-    /** Interval in ms for cleaning up stale peer states. @default 5000 */
-    cleanupIntervalMs?: number;
-    /** Time in ms before a peer's state is considered stale. @default 30000 */
-    staleAfterMs?: number;
-    /** Minimum ms between outgoing broadcasts (throttle). @default 0 */
-    throttleMs?: number;
-  };
+export interface EphemeralConfig {
+  cleanupIntervalMs?: number;
+  throttleMs?: number;
+  staleAfterMs?: number;
+
 }
 
 export interface AuthConfig {
@@ -108,18 +102,73 @@ export interface NetworkConfig {
   reconnectDelay?: number;
 }
 
-export interface DbConfig {
+
+  /** Optional ENS identity */
+  ens?: string;
+}
+
+export interface IpfsProvider {
+  upload(data: Blob | Uint8Array): Promise<string>;
+  fetch(cid: string): Promise<Blob>;
+}
+
+export interface IpfsConfig {
   /**
-   * IPFS RPC URL for uploading blobs.
-   * @default "https://ipfs.infura.io:5001/api/v0"
+   * Enable or disable IPFS/Filecoin integration.
+   * @default false
    */
-  ipfsRpcUrl?: string;
+  enabled?: boolean;
 
   /**
-   * IPFS Gateway URL for downloading blobs.
+   * The base URL of the IPFS HTTP API endpoint for uploading files.
+   * Typically 'http://localhost:5001' or a remote pinning/gateway API.
+   * @default "http://localhost:5001"
+   */
+  apiUrl?: string;
+
+  /**
+   * The base URL of the IPFS gateway for fetching files.
+   * Typically 'https://ipfs.io/ipfs/' or a local gateway.
    * @default "https://ipfs.io/ipfs/"
    */
-  ipfsGatewayUrl?: string;
+  gatewayUrl?: string;
+
+  /**
+   * Threshold in bytes above which a Blob or Uint8Array is offloaded to IPFS.
+   * If not set or 0, any Blob/Uint8Array will be uploaded.
+   * @default 0
+   */
+  sizeThreshold?: number;
+
+  /**
+   * Optional custom upload/fetch implementation, useful for tests or custom pinning services.
+   */
+  provider?: IpfsProvider;
+}
+
+export interface ConflictResolverConfig {
+  /**
+   * Enable AI-driven semantic conflict resolution.
+   * @default false
+   */
+  enabled?: boolean;
+
+  /**
+   * Optional local model name used by the reference resolver.
+   */
+  modelName?: string;
+
+  /**
+   * Minimum confidence required before the resolver auto-applies a merge.
+   * Conflicts below this threshold are flagged for review.
+   * @default 0.7
+   */
+  autoApplyThreshold?: number;
+
+  /**
+   * Called when a conflict is flagged for review.
+   */
+  onConflict?: (collectionName: string, suggestion: string) => void;
 }
 
 export interface ZerithDBConfig {

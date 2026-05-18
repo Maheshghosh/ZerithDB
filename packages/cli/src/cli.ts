@@ -10,8 +10,6 @@ import { formatCommand } from "./commands/format.js";
 import { maintenanceCommand } from "./commands/maintenance.js";
 import { purgeCommand } from "./purge.js";
 import { generateCommand } from "./commands/generate.js";
-import { inferCommand } from "./commands/infer.js";
-import { migrateCommand } from "./commands/migrate.js";
 
 import { checkConnectivity } from "./checkConnectivity.js";
 
@@ -19,14 +17,16 @@ const VERSION = "0.2.0";
 
 console.log(
   chalk.cyan(`
-  ███████╗███████╗██████╗ ██╗████████╗██╗  ██╗██████╗ ██████╗ 
-  ╚══███╔╝██╔════╝██╔══██╗██║╚══██╔══╝██║  ██║██╔══██╗██╔══██╗
-    ███╔╝ █████╗  ██████╔╝██║   ██║   ███████║██║  ██║██████╔╝
-   ███╔╝  ██╔══╝  ██╔══██╗██║   ██║   ██╔══██║██║  ██║██╔══██╗
-  ███████╗███████╗██║  ██║██║   ██║   ██║  ██║██████╔╝██████╔╝
-  ╚══════╝╚══════╝╚═╝  ╚═╝╚═╝   ╚═╝   ╚═╝  ╚═╝╚═════╝ ╚═════╝ 
-  `)
+  ██████╗ ███████╗███████╗██████╗ ██████╗  █████╗ ███████╗███████╗
+  ██╔══██╗██╔════╝██╔════╝██╔══██╗██╔══██╗██╔══██╗██╔════╝██╔════╝
+  ██████╔╝█████╗  █████╗  ██████╔╝██████╔╝███████║███████╗█████╗
+  ██╔═══╝ ██╔══╝  ██╔══╝  ██╔══██╗██╔══██╗██╔══██║╚════██║██╔══╝
+  ██║     ███████╗███████╗██║  ██║██████╔╝██║  ██║███████║███████╗
+  ╚═╝     ╚══════╝╚══════╝╚═╝  ╚═╝╚═════╝ ╚═╝  ╚═╝╚══════╝╚══════╝
+`)
 );
+
+console.log(chalk.gray(`  Build full-stack apps with ZERO backend. v${VERSION}\n`));
 
 async function main() {
   console.log(chalk.cyan("Starting ZerithDB CLI...\n"));
@@ -63,12 +63,35 @@ async function main() {
     .option("-o, --out <out>", "Path to output generated TypeScript file", "./src/zerith-schemas.ts")
     .action(generateCommand);
 
+  // GENERATE (aliased to seed)
+  program
+    .command("generate")
+    .alias("seed")
+    .description(
+      "Generate semantically accurate mock JSON data using local AI or offline heuristics"
+    )
+    .option("-p, --prompt <prompt>", "Natural language instruction for the data seeder")
+    .option("-c, --count <count>", "Number of records to generate", "10")
+    .option(
+      "-s, --schema <schema-path>",
+      "Optional path to TypeScript schema, Zod schema, or JSON schema file"
+    )
+    .option("-o, --output <output-path>", "Output JSON file path", "./mock-data.json")
+    .option(
+      "--provider <provider>",
+      "Generation provider: 'local' (offline engine) or 'ollama' (local LLM)",
+      "local"
+    )
+    .option("--model <model>", "Ollama model to use if using ollama provider", "llama3")
+    .action(generateCommand);
+
   // PURGE
   program
     .command("purge")
     .description("Purge all local ZerithDB data stored in the home directory")
     .action(purgeCommand);
 
+  // INFER
   program
     .command("infer <path>")
     .description("Scan JSON and infer TypeScript & Zod schemas")
@@ -78,16 +101,6 @@ async function main() {
     .option("--ts-only", "Generate only TypeScript interfaces")
     .option("--pretty", "Format output with Prettier")
     .action(inferCommand);
-
-  program
-    .command("migrate <source>")
-    .description("Migrate database schema and records from legacy providers to ZerithDB local-first format")
-    .option("-u, --url <url>", "Supabase URL / Firebase Project URL")
-    .option("-k, --key <key>", "Supabase API key / service key")
-    .option("-t, --table <tables>", "Specific table(s) to migrate, comma-separated")
-    .option("-a, --app <appId>", "ZerithDB App ID to embed in snapshot", "zerithdb-migrated-app")
-    .option("-o, --output <output>", "Output JSON file path", "zerithdb-migration-payload.json")
-    .action(migrateCommand);
 
   program.parse(process.argv);
 }

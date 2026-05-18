@@ -1,43 +1,15 @@
-/**
- * ZerithDB SDK Integration
- *
- * This file demonstrates how to initialize the ZerithDB client
- * for a local-first, peer-to-peer web application.
- */
+import { createApp } from "zerithdb-sdk";
 
-// import { createClient } from "zerithdb-sdk";
+export const zerithApp = createApp({
+  appId: "my-app-unique-id",
 
-// Mock implementation since the package is not installed in the workspace
-export const createClient = (config: Record<string, unknown>) => {
-  console.log("ZerithDB Initialized with config:", config);
-  return {
-    collection: (name: string) => ({
-      insert: async (data: Record<string, unknown>) => console.log(`Inserted into ${name}:`, data),
-      subscribe: (cb: (data: unknown[]) => void) => cb([]),
-      find: async (_query: Record<string, unknown>) => [],
-    }),
-    sync: {
-      enable: () => console.log("P2P Sync Enabled"),
-    },
-    network: {
-      on: (event: string, _cb: (peer: { id: string }) => void) => console.log(`Listening for ${event}`),
-    }
-  };
-};
-
-/**
- * Global ZerithDB Instance
- */
-export const db = createClient({
-  appId: "zerith-web-demo",
-  storage: "indexeddb",
   sync: {
-    p2p: true,
-    signalingUrl: "wss://signal.zerith.dev",
+    signalingUrl: "wss://signal.zerithdb.dev",
   },
 });
 
-// Auto-enable sync in browser
 if (typeof window !== "undefined") {
-  db.sync.enable();
+  // Expose for debugging in the browser console (development only)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (window as any).__zerithApp = zerithApp;
 }

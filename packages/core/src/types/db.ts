@@ -8,8 +8,8 @@ export type DocumentId = string | number;
 /** Name of a collection within ZerithDB */
 export type CollectionName = string;
 
-/** Metadata fields added to every document by ZerithDB */
-type Metadata = {
+/** System fields automatically added to every stored document */
+export type DocumentMetadata = {
   _id: DocumentId;
   /** Created-at timestamp in Unix milliseconds */
   _createdAt: number;
@@ -23,43 +23,27 @@ type Metadata = {
   _deleted?: boolean;
 };
 
-/** Internal helper to safely merge schema and metadata fields */
-type MergeDocument<T extends Record<string, any>> = {
-  [K in keyof T | keyof Metadata]: K extends keyof Metadata
-    ? Metadata[K]
-    : K extends keyof T
-      ? T[K]
-      : never;
-};
+/** Base document shape. All stored documents have system fields added automatically. */
+export type Document<T extends Record<string, any> = Record<string, any>> = T & DocumentMetadata;
 
-/** Base document shape. All stored documents have metadata fields added automatically. */
-export type Document<T extends Record<string, any> = Record<string, any>> = MergeDocument<T>;
+type RegexFilter =
+  | { $regex: RegExp | string }
+  | {
+      $regex: RegExp | string;
+      /** Regex flags (for example: "i", "gm") */
+      $flags?: string;
+      /** Alias for $flags for MongoDB-like ergonomics */
+      $options?: string;
+    };
 
 /**
  * MongoDB-style query filter operators.
- * Supports filtering on both schema fields and metadata.
+ * Nested object fields are matched by equality.
+ * Includes metadata fields (_id, _createdAt, _updatedAt) from Document<T>.
  */
 export type QueryFilter<T extends Record<string, any>> = {
-  [K in keyof Document<T>]?:
-    | Document<T>[K]
-    | { $eq: Document<T>[K] }
-    | { $ne: Document<T>[K] }
-    | { $gt: Document<T>[K] }
-    | { $gte: Document<T>[K] }
-    | { $lt: Document<T>[K] }
-    | { $lte: Document<T>[K] }
-    | { $in: Document<T>[K][] }
-    | { $nin: Document<T>[K][] }
-    | { $regex: RegExp | string };
+  [K in keyof Document<T>]?: QueryFilterValue<Document<T>[K]>;
 };
-
-import type { CollectionSchemaOptions } from "./validation.js";
-
-/** Options when creating a collection handle */
-export interface CollectionOptions<T extends Record<string, any> = Record<string, any>> {
-  /** Optional schema validation */
-  validation?: CollectionSchemaOptions<T>;
-}
 
 /** Partial update spec — only user-defined fields are modified */
 export type UpdateSpec<T extends Record<string, any>> = {

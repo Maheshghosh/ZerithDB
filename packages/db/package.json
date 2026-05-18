@@ -26,23 +26,7 @@
     "dexie": "^4.0.8",
     "uuid": "^10.0.0",
     "zerithdb-core": "workspace:*",
-    "zerithdb-errors": "workspace:*"
-  },
-  "peerDependencies": {
-    "zod": "^3.22.0"
-  },
-  "peerDependenciesMeta": {
-    "zod": {
-      "optional": true
-    }
-  },
-  "peerDependencies": {
-    "zod": "^3.x"
-  },
-  "peerDependenciesMeta": {
-    "zod": {
-      "optional": true
-    }
+    "zerithdb-auth": "workspace:*"
   },
   "devDependencies": {
     "@types/uuid": "^10.0.0",

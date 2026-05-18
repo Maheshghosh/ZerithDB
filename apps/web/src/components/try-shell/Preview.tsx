@@ -54,7 +54,7 @@ const Preview: React.FC<PreviewProps> = ({ code, onReset }) => {
     const memoryDB: Record<string, Record<string, unknown>[]> = {};
 
     const mockSDK = {
-      createApp: (config: Record<string, unknown>) => {
+      createApp: (config: Record<string, unknown> | undefined) => {
         const appId = (config?.appId as string) || "demo-app";
 
         return {
@@ -71,17 +71,12 @@ const Preview: React.FC<PreviewProps> = ({ code, onReset }) => {
 
               const docsWithId = docs.map((d) => ({
                 ...d,
-                id:
-                  (d.id as string) ||
-                  Math.random().toString(36).substring(2, 9),
+                id: (d.id as string) || Math.random().toString(36).substring(2, 11),
                 _created: Date.now(),
               }));
 
               memoryDB[collection].push(...docsWithId);
-
-              return Array.isArray(data)
-                ? docsWithId.map((d) => d.id as string)
-                : (docsWithId[0].id as string);
+              return Array.isArray(data) ? docsWithId.map((d) => d.id) : docsWithId[0].id;
             },
 
             find: async (filter: Record<string, unknown> = {}) => {
@@ -92,31 +87,12 @@ const Preview: React.FC<PreviewProps> = ({ code, onReset }) => {
                   const val = filter[key];
 
                   if (typeof val === "object" && val !== null) {
-                    const obj = val as Record<string, number>;
-
-                    if (
-                      obj.$gt !== undefined &&
-                      !((doc[key] as number) > obj.$gt)
-                    )
-                      return false;
-
-                    if (
-                      obj.$lt !== undefined &&
-                      !((doc[key] as number) < obj.$lt)
-                    )
-                      return false;
-
-                    if (
-                      obj.$gte !== undefined &&
-                      !((doc[key] as number) >= obj.$gte)
-                    )
-                      return false;
-
-                    if (
-                      obj.$lte !== undefined &&
-                      !((doc[key] as number) <= obj.$lte)
-                    )
-                      return false;
+                    const objVal = val as Record<string, number>;
+                    const docVal = doc[key] as number;
+                    if (objVal.$gt !== undefined && !(docVal > objVal.$gt)) return false;
+                    if (objVal.$lt !== undefined && !(docVal < objVal.$lt)) return false;
+                    if (objVal.$gte !== undefined && !(docVal >= objVal.$gte)) return false;
+                    if (objVal.$lte !== undefined && !(docVal <= objVal.$lte)) return false;
                   } else if (doc[key] !== val) {
                     return false;
                   }
@@ -139,11 +115,7 @@ const Preview: React.FC<PreviewProps> = ({ code, onReset }) => {
                 }) || null
               );
             },
-
-            update: async (
-              filter: Record<string, unknown>,
-              update: { $set?: Record<string, unknown> }
-            ) => {
+            update: async (filter: Record<string, unknown>, update: Record<string, unknown>) => {
               const docs = memoryDB[collection] || [];
 
               docs.forEach((doc) => {
@@ -154,7 +126,7 @@ const Preview: React.FC<PreviewProps> = ({ code, onReset }) => {
                 }
 
                 if (match && update.$set) {
-                  Object.assign(doc, update.$set);
+                  Object.assign(doc, update.$set as Record<string, unknown>);
                 }
               });
             },
@@ -178,9 +150,7 @@ const Preview: React.FC<PreviewProps> = ({ code, onReset }) => {
             enable: () => mockConsole.log("Sync enabled for", appId),
             disable: () => mockConsole.log("Sync disabled for", appId),
             status: () => "connected",
-
-            // eslint-disable-next-line @typescript-eslint/no-unused-vars
-            on: (event: string, cb: (...args: unknown[]) => void) =>
+            on: (event: string, _cb: (...args: unknown[]) => void) =>
               mockConsole.log("Attached listener for", event),
           },
 
@@ -225,9 +195,12 @@ const Preview: React.FC<PreviewProps> = ({ code, onReset }) => {
       const run = new Function("sdk", "console", functionBody);
 
       await run(mockSDK, mockConsole);
-    } catch (err) {
-      const errorObj = err as Error;
-      setError(errorObj.message);
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError(String(err));
+      }
     } finally {
       setIsRunning(false);
     }

@@ -75,19 +75,3 @@ export class ZerithDBError extends Error {
     return `${this.name} [${this.code}]: ${this.message}`;
   }
 }
-
-export class SchemaValidationError extends ZerithDBError {
-  public readonly issues: ReadonlyArray<{ path: Array<string | number | symbol>; message: string }>;
-
-  constructor(
-    code: ErrorCode,
-    message: string,
-    issues: Array<{ path: Array<string | number | symbol>; message: string }>,
-    options?: ErrorOptions
-  ) {
-    super(code, message, options);
-    this.name = "SchemaValidationError";
-    this.issues = issues;
-    Object.setPrototypeOf(this, new.target.prototype);
-  }
-}

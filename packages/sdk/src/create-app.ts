@@ -1,8 +1,8 @@
 import type { ZerithDBConfig, CollectionOptions } from "zerithdb-core";
 import { ValidatorRegistry } from "zerithdb-core";
 import { Logger } from "zerithdb-core";
-import type { Document, Identity, QueryFilter, SyncState } from "zerithdb-core";
-export type { Document, Identity, QueryFilter, SyncState, ZerithDBConfig, CollectionOptions };
+import type { Document, Identity, QueryFilter, SyncState, ZerithDBConfig, InsertResult, PeerInfo, UpdateSpec } from "zerithdb-core";
+export type { Document, Identity, QueryFilter, SyncState, ZerithDBConfig, InsertResult, PeerInfo, UpdateSpec };
 import { MemoryCollector, estimateStorageBytes } from "zerithdb-devtools";
 import { ZerithDBError, ErrorCode } from "zerithdb-core";
 import { DbClient, CollectionClient } from "./db-client.js";
@@ -39,10 +39,8 @@ export interface ZerithDBApp {
    * await todos.insert({ text: "", done: false });       // ❌ throws DB_VALIDATION_FAILED
    * ```
    */
-  db<T extends Record<string, any> = Record<string, any>>(
-    name: string,
-    options?: CollectionOptions<T>
-  ): CollectionClient<T>;
+  db<T extends Record<string, any> = Record<string, any>>(name: string): CollectionClient<T>;
+  dbClient: DbClient;
 
   /** CRDT sync engine — manages Yjs documents and P2P update propagation */
   sync: SyncEngine;
@@ -142,13 +140,42 @@ export function createApp(config: ZerithDBConfig): ZerithDBApp {
   });
 
   const auth = new AuthManager(resolvedConfig);
-  const validatorRegistry = new ValidatorRegistry();
-
-  const db = new DbClient(resolvedConfig,auth);
-  db.setValidatorRegistry(validatorRegistry);
-
+  const db = new DbClient(resolvedConfig, auth);
   const network = new NetworkManager(resolvedConfig, auth);
-  const sync = new SyncEngine(resolvedConfig, db, network, validatorRegistry);
+  let syncInstance: SyncEngine | null = null;
+
+  const getSync = () => {
+    if (!syncInstance) {
+      syncInstance = new SyncEngine(resolvedConfig, db, network, auth);
+    }
+
+    return syncInstance;
+  };
+
+  if (resolvedConfig.conflictResolver?.enabled === true) {
+    const resolver = new LLMConflictResolver({
+      modelName: resolvedConfig.conflictResolver.modelName,
+      autoApplyThreshold: resolvedConfig.conflictResolver.autoApplyThreshold,
+    });
+
+    sync.registerPlugin({
+      id: resolver.id,
+      version: resolver.version,
+      conflictResolver: resolver,
+    });
+
+    if (resolvedConfig.conflictResolver.onConflict) {
+      const onConflict = resolvedConfig.conflictResolver.onConflict;
+      sync.on("conflict:flagged", (event) => {
+        const suggestion =
+          typeof event === "object" && event !== null && "suggestion" in event &&
+          typeof event.suggestion === "string"
+            ? event.suggestion
+            : "Conflict flagged for review";
+        onConflict(event.collectionName, suggestion);
+      });
+    }
+  }
 
   let memoryCollector: MemoryCollector | null = null;
 
@@ -221,8 +248,11 @@ export function createApp(config: ZerithDBConfig): ZerithDBApp {
       await Promise.all(Array.from(backupAdapters).map((a) => a.stop()));
 
       backupAdapters.clear();
+      if (syncInstance) {
+        await syncInstance.dispose();
+      }
 
-      await Promise.all([sync.dispose(), network.dispose(), db.dispose()]);
+      await Promise.all([network.dispose(), db.dispose()]);
     },
   };
 }

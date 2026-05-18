@@ -1,24 +1,27 @@
 import * as Y from "yjs";
 import * as awarenessProtocol from "y-protocols/awareness";
 import { IndexeddbPersistence } from "y-indexeddb";
-import { EventEmitter, ValidatorRegistry } from "zerithdb-core";
-import type { ZerithDBConfig, SyncState, SyncPlugin } from "zerithdb-core";
+import type { ZerithDBConfig, SyncState, SyncPlugin, IncomingPeerDataMessage } from "zerithdb-core";
+import { EventEmitter } from "zerithdb-core";
 import type { DbClient } from "zerithdb-db";
 import type { NetworkManager } from "zerithdb-network";
 import type { SyncProtocol } from "zerithdb-core";
 import { InboxQueue } from "./queue/InboxQueue.js";
 import { OutboxQueue } from "./queue/OutboxQueue.js";
 import { EphemeralStateManager } from "./ephemeral-state.js";
+import { bytesToBase64, base64ToBytes } from "zerithdb-utils";
 import { DefaultSyncProtocol } from "./protocol.js";
 
 type SyncEvents = {
   "state:change": SyncState;
   "update:local": { collectionName: string; update: Uint8Array };
   "update:remote": { collectionName: string; update: Uint8Array; fromPeer: string };
-  "validation:error": {
+  "conflict:flagged": {
     collectionName: string;
     fromPeer: string;
-    issues: Array<{ path: Array<string | number | symbol>; message: string }>;
+    localSnapshot: Uint8Array;
+    incomingUpdate: Uint8Array;
+    suggestion?: string;
   };
 };
 
@@ -35,12 +38,8 @@ export class SyncEngine extends EventEmitter<SyncEvents> {
   readonly inbox: InboxQueue<Uint8Array>;
   public readonly ephemeral: EphemeralStateManager;
   private _enabled = false;
-  private _state: SyncState = {
-    synced: false,
-    pendingUpdates: 0,
-    connectedPeers: 0,
-  };
-
+  
+  private _state: SyncState = { synced: false, pendingUpdates: 0, connectedPeers: 0 };
   private plugins = new Map<string, SyncPlugin>();
   private activePluginVersion = 1;
   private pendingUpdates = new Map<string, Uint8Array[]>();
@@ -53,7 +52,7 @@ export class SyncEngine extends EventEmitter<SyncEvents> {
     private readonly config: ZerithDBConfig,
     private readonly db: DbClient,
     private readonly network: NetworkManager,
-    private readonly validatorRegistry?: ValidatorRegistry
+    private readonly auth: AuthManager
   ) {
     super();
 
@@ -70,7 +69,19 @@ export class SyncEngine extends EventEmitter<SyncEvents> {
       void this.refreshPendingCount();
     });
 
-    void this.refreshPendingCount();
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", this.handleVisibilityChange);
+    }
+
+    // [UCAN] Get the local app owner's DID
+    const identity = this.auth.identity;
+    if (!identity) {
+      throw new ZerithDBError(
+        ErrorCode.AUTH_KEY_NOT_FOUND,
+        "SyncEngine requires a signed‑in identity. Call auth.signIn() before enabling sync."
+      );
+    }
+    this.appOwnerDid = identity.did;
   }
 
   private handleVisibilityChange = (): void => {
@@ -114,8 +125,26 @@ export class SyncEngine extends EventEmitter<SyncEvents> {
 
     this.network.off("message", this.onPeerUpdate);
     this.network.off("peer:connected", this.onPeerConnected);
-    this.network.off("peer:disconnected", this.onPeerDisconnected);
+  this.network.off("peer:disconnected", this.onPeerDisconnected);
+    this.ephemeral.disable();
     this.updateState({ synced: false, connectedPeers: 0 });
+
+    if (this.antiEntropyTimer) {
+      clearInterval(this.antiEntropyTimer);
+      this.antiEntropyTimer = null;
+    }
+  }
+
+  private triggerAntiEntropy(): void {
+    if (!this._enabled || this.network.connectedPeerCount === 0) return;
+    for (const [collectionName, doc] of this.docs.entries()) {
+      const stateVector = Y.encodeStateVector(doc);
+      this.network.broadcast({
+        type: "sync-request",
+        payload: this.encodeMessage(collectionName, stateVector),
+      });
+    }
+  }
 
   registerPlugin(plugin: SyncPlugin): void {
     this.plugins.set(plugin.id, plugin);
@@ -142,106 +171,61 @@ export class SyncEngine extends EventEmitter<SyncEvents> {
     });
   }
 
-  /**
-   * Update the sync protocol at runtime.
-   * This allows hot-reloading different wire formats or conflict resolution
-   * rules without dropping existing peer connections.
-   */
-  setProtocol(protocol: SyncProtocol): void {
-    console.log(
-      `[SyncEngine] Switching protocol: ${this.protocol.name} v${this.protocol.version} -> ${protocol.name} v${protocol.version}`
-    );
-    this.protocol = protocol;
-  }
-
-  /** Current sync state snapshot */
   get state(): Readonly<SyncState> {
     return this._state;
   }
 
-  /**
-   * Alias for getDoc to match common Yjs terminology.
-   */
-  getYDoc(collectionName: string): Y.Doc {
-    return this.getDoc(collectionName);
-  }
-
-  /**
-   * Get or create the Yjs document for a collection.
-   * Documents are persisted to IndexedDB via y-indexeddb.
-   */
   getDoc(collectionName: string): Y.Doc {
     if (this.docs.has(collectionName)) {
       return this.docs.get(collectionName)!;
     }
 
-    const doc = new Y.Doc({
-      guid: `${this.config.appId}:${collectionName}`,
-    });
-
+    const doc = new Y.Doc({ guid: `${this.config.appId}:${collectionName}` });
     const persistence = new IndexeddbPersistence(
       `zerithdb_sync_${this.config.appId}_${collectionName}`,
       doc
     );
 
     this.persistences.set(collectionName, persistence);
+// Broadcast local updates to peers (batched via requestAnimationFrame)
+doc.on("update", (update: Uint8Array, origin: unknown) => {
+  if (origin === "remote") return; // Don't echo back remote updates
 
     doc.on("update", (update: Uint8Array, origin: unknown) => {
       if (origin === "remote") return;
-
       this.queueUpdate(collectionName, update);
     });
 
     this.docs.set(collectionName, doc);
 
+    // Request initial synchronization from any already connected peers
+    if (this._enabled && this.network.connectedPeerCount > 0) {
+      const stateVector = Y.encodeStateVector(doc);
+      this.network.broadcast({
+        type: "sync-request",
+        payload: this.encodeMessage(collectionName, stateVector),
+      });
+    }
+
     return doc;
   }
 
-  /**
-   * Get or create the awareness instance for a collection.
-   * Awareness is used for ephemeral state like cursor positions.
-   */
-  getAwareness(collectionName: string): awarenessProtocol.Awareness {
-    if (this.awarenesses.has(collectionName)) {
-      // biome-ignore lint: map guarantees defined
-      return this.awarenesses.get(collectionName)!;
-    }
-
-    const doc = this.getDoc(collectionName);
-    const awareness = new awarenessProtocol.Awareness(doc);
-
-    awareness.on("update", ({ added, updated, removed }: any, origin: any) => {
-      if (origin === "remote") return;
-      if (!this._enabled) return;
-
-      const changedClients = added.concat(updated).concat(removed);
-      const update = awarenessProtocol.encodeAwarenessUpdate(awareness, changedClients);
-
-      this.network.broadcast({
-        type: "awareness",
-        payload: this.encodeMessage(collectionName, update),
-      });
-    });
-
-    this.awarenesses.set(collectionName, awareness);
-    return awareness;
-  }
-
-  /**
-   * Apply a remote CRDT update to the local document.
-   * Called by the network layer when a peer sends an update.
-   */
   async applyRemoteUpdate(
     collectionName: string,
     update: Uint8Array,
     fromPeer: string
   ): Promise<void> {
+    // [UCAN] Check permission before processing any remote update
+    if (!(await this.checkRemotePermission(fromPeer, collectionName, "write"))) {
+      console.warn(`Permission denied: peer ${fromPeer} cannot write to ${collectionName}`);
+      return;
+    }
+
     let finalUpdate: Uint8Array | null = update;
 
     for (const plugin of this.plugins.values()) {
       if (plugin.onBeforeApplyUpdate) {
         finalUpdate = await plugin.onBeforeApplyUpdate(collectionName, finalUpdate, fromPeer);
-
         if (!finalUpdate) return;
       }
     }
@@ -366,11 +350,11 @@ export class SyncEngine extends EventEmitter<SyncEvents> {
     this.pendingUpdates.clear();
   }
 
-  private onPeerUpdate(msg: { type: string; payload: Uint8Array | string; from: string }): void {
+  private onPeerUpdate(msg: IncomingPeerDataMessage): void {
     if (msg.type === "sync-upgrade-offer") {
       const payloadStr =
         typeof msg.payload === "string" ? msg.payload : new TextDecoder().decode(msg.payload);
-
+      const offer = JSON.parse(payloadStr) as { pluginUrl: string; version: number };
       this.loadPlugin(offer.pluginUrl)
         .then(() => {
           this.network.sendTo(msg.from, {
@@ -379,9 +363,7 @@ export class SyncEngine extends EventEmitter<SyncEvents> {
           });
         })
         .catch(() => {
-          console.warn(
-            `Peer ${msg.from} failed to upgrade. Ignoring their future updates.`
-          );
+          console.warn(`Peer ${msg.from} failed to upgrade. Ignoring their updates.`);
         });
 
       return;
@@ -393,7 +375,15 @@ export class SyncEngine extends EventEmitter<SyncEvents> {
 
     if (msg.type !== "sync-update" && msg.type !== "awareness-update") return;
 
-    const decoded = this.protocol.decode(msg.payload);
+    let payload: Uint8Array;
+
+    try {
+      payload = base64ToBytes(msg.payload);
+    } catch {
+      return;
+    }
+
+    const decoded = this.decodeMessage(payload);
     if (decoded === null) return;
 
     if (msg.type === "sync-update") {
@@ -403,18 +393,27 @@ export class SyncEngine extends EventEmitter<SyncEvents> {
     }
   }
 
-  private onPeerConnected(): void {
-    this.updateState({
-      connectedPeers: this.network.connectedPeerCount,
-    });
-
+  private onPeerConnected(peer: { peerId: string }): void {
+  const peerId = peer.peerId;
+    this.updateState({ connectedPeers: this.network.connectedPeerCount });
+    void this.sendCapability(peerId);
     void this.flushOutbox();
+
+    if (peer?.peerId) {
+      for (const [collectionName, doc] of this.docs.entries()) {
+        const stateVector = Y.encodeStateVector(doc);
+        this.network.sendTo(peer.peerId, {
+          type: "sync-request",
+          payload: this.encodeMessage(collectionName, stateVector),
+        });
+      }
+    }
   }
 
-  private onPeerDisconnected(): void {
-    this.updateState({
-      connectedPeers: this.network.connectedPeerCount,
-    });
+  private onPeerDisconnected(peer: { peerId: string }): void {
+  const peerId = peer.peerId;
+    this.peerCapabilities.delete(peerId);
+    this.updateState({ connectedPeers: this.network.connectedPeerCount });
   }
 
   private async handleLocalUpdate(collectionName: string, update: Uint8Array): Promise<void> {
@@ -450,7 +449,7 @@ export class SyncEngine extends EventEmitter<SyncEvents> {
 
       await this.outbox.acknowledge(mutation.id);
     } catch {
-      // swallow
+      // Swallow queue errors
     }
   }
 
@@ -477,6 +476,46 @@ export class SyncEngine extends EventEmitter<SyncEvents> {
 
     try {
       const doc = this.getDoc(collectionName);
+      const localSnapshot = Y.encodeStateAsUpdate(doc);
+
+      for (const plugin of this.plugins.values()) {
+        if (!plugin.conflictResolver) continue;
+
+        const resolveConflict = plugin.conflictResolver.resolveConflict;
+        if (!resolveConflict) continue;
+
+        const resolution = await resolveConflict(
+          collectionName,
+          localSnapshot,
+          update,
+          fromPeer
+        );
+
+        if (!resolution) {
+          this.emit("conflict:flagged", {
+            collectionName,
+            fromPeer,
+            localSnapshot,
+            incomingUpdate: update,
+          });
+          break;
+        }
+
+        if (resolution instanceof Uint8Array) {
+          update = resolution;
+        } else {
+          update = resolution.update;
+          if (resolution.suggestion) {
+            this.emit("conflict:flagged", {
+              collectionName,
+              fromPeer,
+              localSnapshot,
+              incomingUpdate: update,
+              suggestion: resolution.suggestion,
+            });
+          }
+        }
+      }
 
       Y.applyUpdate(doc, update, "remote");
 
@@ -502,37 +541,44 @@ export class SyncEngine extends EventEmitter<SyncEvents> {
     void this.sendCapability(peerId);
     void this.flushOutbox();
 
-    if (peer?.peerId) {
-      for (const [collectionName, doc] of this.docs.entries()) {
-        const stateVector = Y.encodeStateVector(doc);
-        this.network.sendTo(peer.peerId, {
-          type: "sync-request",
-          payload: this.encodeMessage(collectionName, stateVector),
-        });
-      }
+    const pending = await this.outbox.getPending();
+    for (const mutation of pending) {
+      this.network.broadcast({
+        type: "sync-update",
+        payload: this.encodeMessage(mutation.collection, mutation.payload),
+      });
+      await this.outbox.acknowledge(mutation.id);
     }
   }
 
-  private onPeerDisconnected(peer: { peerId: string }): void {
-  const peerId = peer.peerId;
-    this.peerCapabilities.delete(peerId);
-    this.updateState({ connectedPeers: this.network.connectedPeerCount });
+  private encodeMessage(collectionName: string, update: Uint8Array): string {
+    const nameBytes = new TextEncoder().encode(collectionName);
+    const header = new Uint8Array(2);
+    header[0] = (nameBytes.length >> 8) & 0xff;
+    header[1] = nameBytes.length & 0xff;
+    const combined = new Uint8Array(2 + nameBytes.length + update.length);
+    combined.set(header, 0);
+    combined.set(nameBytes, 2);
+    combined.set(update, 2 + nameBytes.length);
+    return bytesToBase64(combined);
   }
 
-  private async flushOutbox(): Promise<void> {
-    if (!this._enabled) return;
-    if (this.network.connectedPeerCount === 0) return;
-    if (this.isFlushing) return;
-
-    const pending = await this.outbox.getPending();
-
-    for (const mutation of pending) {
-      this.network.broadcast({
-        type: mutation.type,
-        payload: this.protocol.encode(mutation.collection, mutation.payload),
-      });
-
-      await this.outbox.acknowledge(mutation.id);
+  private decodeMessage(bytes: Uint8Array): {
+    collectionName: string;
+    update: Uint8Array;
+  } | null {
+    try {
+      if (bytes.length < 2) return null;
+      const nameLen = (bytes[0]! << 8) | bytes[1]!;
+      if (bytes.length < 2 + nameLen) return null;
+      const nameBytes = bytes.slice(2, 2 + nameLen);
+      const update = bytes.slice(2 + nameLen);
+      return {
+        collectionName: new TextDecoder().decode(nameBytes),
+        update,
+      };
+    } catch {
+      return null;
     }
   }
 

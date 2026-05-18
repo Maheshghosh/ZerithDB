@@ -22,15 +22,21 @@ import dynamic from "next/dynamic";
 import Image from "next/image";
 
 const CodeWalkthrough = dynamic(() => import("@/components/CodeWalkthrough"), {
-  loading: () => <div className="h-96 animate-pulse rounded-xl bg-gray-100" />,
+  loading: () => (
+    <div className="h-96 animate-pulse rounded-xl bg-gray-100 dark:bg-zinc-800 transition-colors duration-300" />
+  ),
 });
 
 const TerminalShowcase = dynamic(() => import("@/components/TerminalShowcase"), {
-  loading: () => <div className="h-96 animate-pulse rounded-xl bg-gray-100" />,
+  loading: () => (
+    <div className="h-96 animate-pulse rounded-xl bg-gray-100 dark:bg-zinc-800 transition-colors duration-300" />
+  ),
 });
 
 const AnimatedDiagram = dynamic(() => import("@/components/AnimatedDiagram"), {
-  loading: () => <div className="h-96 animate-pulse rounded-xl bg-gray-100" />,
+  loading: () => (
+    <div className="h-96 animate-pulse rounded-xl bg-gray-100 dark:bg-zinc-800 transition-colors duration-300" />
+  ),
 });
 
 const AnimatedDiagram = dynamic(() => import("@/components/AnimatedDiagram"), {
@@ -415,10 +421,17 @@ export default function LandingPage() {
           </Link>
           <Link
             href="#playground"
-            className="flex items-center gap-2 bg-blue-50 text-blue-700 border border-blue-100 px-6 py-3.5 rounded-xl font-medium text-base hover:bg-blue-100 transition-all w-full sm:w-auto justify-center shadow-sm"
+            className="flex items-center gap-2 bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 border border-blue-100 dark:border-blue-900 px-6 py-3.5 rounded-xl font-medium text-base hover:bg-blue-100 dark:hover:bg-blue-900/40 transition-all transition-colors duration-300 w-full sm:w-auto justify-center shadow-sm"
           >
             <Zap className="w-4 h-4 animate-pulse" />
             Try Playground
+          </Link>
+          <Link
+            href="/dev"
+            className="flex items-center gap-2 bg-slate-900 text-white px-6 py-3.5 rounded-xl font-medium text-base hover:bg-slate-800 transition-all w-full sm:w-auto justify-center shadow-sm"
+          >
+            <Terminal className="w-4 h-4" />
+            Dev Dashboard
           </Link>
           <a
             href="https://github.com/Zerith-Labs/ZerithDB"
@@ -1010,22 +1023,6 @@ export default function LandingPage() {
             >
               GitHub
             </a>
-            <Link
-              href="/"
-              onClick={() => toast("Blog will be available soon")}
-              className="hover:text-foreground transition-colors cursor-pointer"
-            >
-              Blog
-            </Link>
-            <Link
-              href="/"
-              onClick={() => toast("Pricing will be available soon")}
-              className="hover:text-foreground transition-colors cursor-pointer"
-            >
-              Pricing
-            </Link>
-           
-
             <a
               href="https://discord.gg/MhvuDvzWfF"
               target="_blank"

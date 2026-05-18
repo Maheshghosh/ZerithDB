@@ -48,14 +48,6 @@
     "zerithdb-errors": "workspace:*",
     "zerithdb-wallet": "workspace:*"
   },
-  "peerDependencies": {
-    "zod": "^3.x"
-  },
-  "peerDependenciesMeta": {
-    "zod": {
-      "optional": true
-    }
-  },
   "devDependencies": {
     "zerithdb-eslint-config": "workspace:*",
     "zerithdb-tsconfig": "workspace:*",

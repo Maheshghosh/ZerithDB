@@ -1,3 +1,4 @@
+import { Dexie, type Table } from "dexie";
 import { EventEmitter } from "zerithdb-core";
 import type { StorageProvider } from "./storage-provider.js";
 import type { QueueChange, QueuedMutation, QueuedMutationDirection } from "./types.js";

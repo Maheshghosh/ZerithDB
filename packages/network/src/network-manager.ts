@@ -1,16 +1,44 @@
 import SimplePeer from "simple-peer";
-import type { ZerithDBConfig, PeerId, PeerInfo, MediaStreamMetadata } from "zerithdb-core";
-import { EventEmitter, ZerithDBError, ErrorCode } from "zerithdb-core";
+import type {
+  ZerithDBConfig,
+  PeerId,
+  PeerInfo,
+  MediaStreamKind,
+  MediaStreamMetadata,
+  IncomingPeerDataMessage,
+  PeerDataMessage,
+} from "zerithdb-core";
+import { EventEmitter, ZerithDBError, ErrorCode, PeerDataMessageSchema } from "zerithdb-core";
 import type { AuthManager } from "zerithdb-auth";
-import { RelaySelector } from "./relay-selector.js";
+import type { SignalingTransport } from "./signaling-transport.js";
+import { WebSocketTransport } from "./transports/websocket-transport.js";
+import { PollingTransport } from "./transports/polling-transport.js";
+import { NameRegistry } from "./name-registry.js";
+import { MockENSResolver } from "./ens-resolver.js";
+
+export interface WebRtcBufferStats {
+  peerCount: number;
+  bufferedBytes: number;
+  peers: Array<{ peerId: PeerId; bufferedAmount: number }>;
+}
+
+/** simple-peer exposes the underlying RTCDataChannel as a private field */
+interface SimplePeerWithChannel {
+  connected: boolean;
+  _channel?: RTCDataChannel;
+}
 
 type NetworkEvents = {
   "peer:connected": PeerInfo;
   "peer:disconnected": { peerId: PeerId };
-  message: { type: string; payload: Uint8Array | string; from: PeerId };
+  message: IncomingPeerDataMessage;
+  "media:stream": { peerId: PeerId; stream: MediaStream; metadata?: MediaStreamMetadata };
+  "media:track": { peerId: PeerId; track: MediaStreamTrack; stream: MediaStream };
+  "media:stream:metadata": { peerId: PeerId; metadata: MediaStreamMetadata };
+  "media:stream:removed": { peerId: PeerId; streamId: string };
   error: { peerId: PeerId; error: Error };
   "transport:downgrade": { from: "websocket"; to: "polling"; reason: string };
-
+  announcement: string;
 };
 
 export type MediaStreamMetadataInput = Partial<
@@ -22,7 +50,7 @@ export type MediaStreamMetadataInput = Partial<
 
 
 interface SignalingMessage {
-  type: "offer" | "answer" | "ice-candidate" | "peer-list" | "intro";
+  type: "offer" | "answer" | "ice-candidate" | "peer-list" | "announcement";
   from: string;
   to?: string;
   payload: unknown;
@@ -230,10 +258,10 @@ export class NetworkManager extends EventEmitter<NetworkEvents> {
   /**
    * Broadcast a message to all connected peers.
    */
-  broadcast(message: { type: string; payload: string | Uint8Array }): void {
-    const data = JSON.stringify(message);
-    const bytesLength = typeof TextEncoder !== "undefined" ? new TextEncoder().encode(data).length : data.length;
-    for (const [peerId, peer] of this.peers) {
+  broadcast(message: PeerDataMessage): void {
+    const parsed = PeerDataMessageSchema.parse(message);
+    const data = JSON.stringify(parsed);
+    for (const [, peer] of this.peers) {
       if (peer.connected) {
         this.throttledSend(peerId, peer, data, bytesLength);
       }
@@ -243,19 +271,11 @@ export class NetworkManager extends EventEmitter<NetworkEvents> {
   /**
    * Send a message to a specific peer.
    */
-  sendTo(peerId: PeerId, message: { type: string; payload: string | Uint8Array }): void {
+  sendTo(peerId: PeerId, message: PeerDataMessage): void {
+    const parsed = PeerDataMessageSchema.parse(message);
     const peer = this.peers.get(peerId);
     if (peer?.connected) {
-      peer.send(JSON.stringify(message));
-    } else {
-      // Intelligent relay: find the next hop towards the target
-      const nextHop = this.relaySelector.getNextHop(peerId, Array.from(this.peers.keys()));
-      if (nextHop) {
-        this.sendTo(nextHop, {
-          type: "relay",
-          payload: JSON.stringify({ target: peerId, message }),
-        });
-      }
+      peer.send(JSON.stringify(parsed));
     }
   }
 
@@ -530,6 +550,14 @@ export class NetworkManager extends EventEmitter<NetworkEvents> {
 
   // ─── Private — Signaling message handling ─────────────────────────────
 
+  private async createProofOfWork(signalingUrl: string, roomId: string) {
+    return fetchSignalingProofOfWork({
+      baseUrl: this.wsUrlToHttp(signalingUrl),
+      roomId,
+      peerId: this.localPeerId,
+    });
+  }
+
   private async handleSignalingMessage(msg: SignalingMessage): Promise<void> {
     // ─── Identity enrichment (Phase 1) ───
     // Attach human-readable name if provided during signaling
@@ -560,13 +588,13 @@ export class NetworkManager extends EventEmitter<NetworkEvents> {
 
   private handleSignalingMessage(msg: SignalingMessage): void {
     switch (msg.type) {
-      case "peer-list": {
-        // Server sends list of existing peers — pick intelligent subset
-        const allPeers = msg.payload as PeerId[];
-        const maxPeers = this.config.sync?.maxPeers ?? 10;
-        const selectedPeers = this.relaySelector.selectPeers(allPeers, maxPeers);
+      case "announcement":
+        console.warn(`[ZerithDB] System Announcement: ${msg.payload}`);
+        this.emit("announcement", msg.payload as string);
+        break;
 
-        for (const peerId of selectedPeers) {
+      case "peer-list":
+        for (const peerId of msg.payload as PeerId[]) {
           if (peerId !== this.localPeerId) {
             this.knownPeerIds.add(peerId);
             // Deterministic initiator: only smaller ID initiates connection.
@@ -698,27 +726,21 @@ export class NetworkManager extends EventEmitter<NetworkEvents> {
 
     peer.on("data", (data: Uint8Array | string) => {
       try {
-        const bytesLength = typeof data === "string" 
-          ? (typeof TextEncoder !== "undefined" ? new TextEncoder().encode(data).length : data.length)
-          : data.byteLength;
-        this.updateReputation(remotePeerId, bytesLength, 0);
+        const raw = JSON.parse(typeof data === "string" ? data : new TextDecoder().decode(data));
 
-        const msg = JSON.parse(
-          typeof data === "string" ? data : new TextDecoder().decode(data)
-        ) as any;
+        const parsed = PeerDataMessageSchema.safeParse(raw);
 
-        if (msg.type === "relay") {
-          const { target, message } = JSON.parse(msg.payload);
-          if (target === this.localPeerId) {
-            this.emit("message", { ...message, from: remotePeerId });
-          } else {
-            // Forward to next hop
-            this.sendTo(target, message);
-          }
+        if (!parsed.success) {
           return;
         }
 
-        this.emit("message", { ...msg, from: remotePeerId });
+        const msg = {
+          ...parsed.data,
+          from: remotePeerId,
+        };
+
+        this.handlePeerMessage(remotePeerId, parsed.data);
+        this.emit("message", msg);
       } catch {
         // Ignore malformed messages
       }
@@ -862,10 +884,7 @@ export class NetworkManager extends EventEmitter<NetworkEvents> {
     return result;
   }
 
-  private handlePeerMessage(
-    remotePeerId: PeerId,
-    msg: { type: string; payload: string | Uint8Array }
-  ): void {
+  private handlePeerMessage(remotePeerId: PeerId, msg: PeerDataMessage): void {
     if (msg.type === "media-stream-metadata" && typeof msg.payload === "string") {
       const metadata = JSON.parse(msg.payload) as MediaStreamMetadata;
       let peerMetadata = this.remoteStreamMetadata.get(remotePeerId);
@@ -947,4 +966,68 @@ export class NetworkManager extends EventEmitter<NetworkEvents> {
     }, backoff + jitter);
   }
 
+  private async handleInboundDataAsync(
+    remotePeerId: PeerId,
+    data: Uint8Array | string
+  ): Promise<void> {
+    try {
+      const msgStr = typeof data === "string" ? data : new TextDecoder().decode(data);
+      const msg = JSON.parse(msgStr) as {
+        type: string;
+        payload: string | Uint8Array;
+        signature?: string;
+        senderPublicKey?: string;
+      };
+
+      if (this.auth?.biometric?.isBiometricRequiredForSync()) {
+        if (!msg.signature || !msg.senderPublicKey) {
+          console.warn(`[ZerithDB] Dropped unsigned WebRTC message from peer ${remotePeerId}`);
+          return;
+        }
+        const payloadBytes =
+          typeof msg.payload === "string"
+            ? new TextEncoder().encode(msg.payload)
+            : msg.payload instanceof Uint8Array
+              ? msg.payload
+              : new Uint8Array(msg.payload as any);
+
+        const sigBytes = hexToBytes(msg.signature);
+        const isValid = await this.auth.biometric.verify(
+          payloadBytes,
+          sigBytes,
+          msg.senderPublicKey
+        );
+        if (!isValid) {
+          console.error(
+            `[ZerithDB] Invalid biometric signature on WebRTC message from peer ${remotePeerId}`
+          );
+          return;
+        }
+      }
+
+      this.handlePeerMessage(remotePeerId, msg);
+      this.emit("message", { ...msg, from: remotePeerId });
+    } catch (err) {
+      // Ignore malformed messages
+    }
+  }
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function hexToBytes(hex: string): Uint8Array {
+  if (typeof hex !== "string" || hex.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(hex)) {
+    throw new Error(`hexToBytes() received an invalid hex string: "${hex}".`);
+  }
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < hex.length; i += 2) {
+    bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16);
+  }
+  return bytes;
 }

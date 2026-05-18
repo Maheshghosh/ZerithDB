@@ -90,6 +90,20 @@ export interface SyncPlugin {
   ) => Uint8Array | null | Promise<Uint8Array | null>;
 }
 
+export interface ConflictResolver {
+  id: string;
+  version: number;
+  resolveConflict: (
+    collectionName: string,
+    localSnapshot: Uint8Array,
+    incomingUpdate: Uint8Array,
+    fromPeer: string
+  ) =>
+    | Uint8Array
+    | { update: Uint8Array; suggestion?: string }
+    | null
+    | Promise<Uint8Array | { update: Uint8Array; suggestion?: string } | null>;
+}
 /**
  * Defines how sync updates are encoded and decoded for network transmission.
  * Swapping the protocol allows for hot-reloading different wire formats
@@ -100,20 +114,4 @@ export interface SyncProtocol {
   readonly version: string;
   encode(collectionName: string, update: Uint8Array): string | Uint8Array;
   decode(data: string | Uint8Array): { collectionName: string; update: Uint8Array } | null;
-}
-export interface ActiveSpeakerState {
-  peerId: string;
-  audioLevel?: number;
-  updatedAt: number;
-}
-
-export interface VideoParticipantState {
-  peerId: string;
-  muted: {
-    audio: boolean;
-    video: boolean;
-  };
-  streams: Record<string, MediaStreamMetadata>;
-  activeSpeaker?: ActiveSpeakerState;
-  updatedAt: number;
 }

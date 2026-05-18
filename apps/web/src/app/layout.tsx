@@ -30,9 +30,7 @@ export default function RootLayout({
         <ThemeProvider>
           <ThemeToggle />
           {children}
-          <ToasterProvider />
-          <ScrollToTop />
-        </ThemeProvider>
+        </ClientLayout>
       </body>
     </html>
   );
