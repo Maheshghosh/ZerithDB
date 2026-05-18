@@ -1,4 +1,5 @@
 import * as Y from "yjs";
+import * as awarenessProtocol from "y-protocols/awareness";
 import { IndexeddbPersistence } from "y-indexeddb";
 import { EventEmitter, ValidatorRegistry } from "zerithdb-core";
 import type { ZerithDBConfig, SyncState, SyncPlugin } from "zerithdb-core";
@@ -33,7 +34,7 @@ export class SyncEngine extends EventEmitter<SyncEvents> {
 
   private readonly docs = new Map<string, Y.Doc>();
   private readonly persistences = new Map<string, IndexeddbPersistence>();
-
+  private readonly awarenesses = new Map<string, awarenessProtocol.Awareness>();
   readonly outbox: OutboxQueue<Uint8Array>;
   readonly inbox: InboxQueue<Uint8Array>;
 
@@ -150,6 +151,17 @@ export class SyncEngine extends EventEmitter<SyncEvents> {
     return this._state;
   }
 
+  /**
+   * Alias for getDoc to match common Yjs terminology.
+   */
+  getYDoc(collectionName: string): Y.Doc {
+    return this.getDoc(collectionName);
+  }
+
+  /**
+   * Get or create the Yjs document for a collection.
+   * Documents are persisted to IndexedDB via y-indexeddb.
+   */
   getDoc(collectionName: string): Y.Doc {
     if (this.docs.has(collectionName)) {
       return this.docs.get(collectionName)!;
@@ -178,7 +190,38 @@ export class SyncEngine extends EventEmitter<SyncEvents> {
   }
 
   /**
-   * Apply a remote update to the local database with deterministic conflict resolution.
+   * Get or create the awareness instance for a collection.
+   * Awareness is used for ephemeral state like cursor positions.
+   */
+  getAwareness(collectionName: string): awarenessProtocol.Awareness {
+    if (this.awarenesses.has(collectionName)) {
+      // biome-ignore lint: map guarantees defined
+      return this.awarenesses.get(collectionName)!;
+    }
+
+    const doc = this.getDoc(collectionName);
+    const awareness = new awarenessProtocol.Awareness(doc);
+
+    awareness.on("update", ({ added, updated, removed }: any, origin: any) => {
+      if (origin === "remote") return;
+      if (!this._enabled) return;
+
+      const changedClients = added.concat(updated).concat(removed);
+      const update = awarenessProtocol.encodeAwarenessUpdate(awareness, changedClients);
+
+      this.network.broadcast({
+        type: "awareness",
+        payload: this.encodeMessage(collectionName, update),
+      });
+    });
+
+    this.awarenesses.set(collectionName, awareness);
+    return awareness;
+  }
+
+  /**
+   * Apply a remote CRDT update to the local document.
+   * Called by the network layer when a peer sends an update.
    */
   async applyRemoteUpdate(
     collectionName: string,
@@ -237,6 +280,14 @@ export class SyncEngine extends EventEmitter<SyncEvents> {
     }
   }
 
+  /**
+   * Apply a remote awareness update.
+   */
+  applyRemoteAwarenessUpdate(collectionName: string, update: Uint8Array): void {
+    const awareness = this.getAwareness(collectionName);
+    awarenessProtocol.applyAwarenessUpdate(awareness, update, "remote");
+  }
+
   async dispose(): Promise<void> {
     if (typeof document !== "undefined") {
       document.removeEventListener("visibilitychange", this.handleVisibilityChange);
@@ -262,9 +313,12 @@ export class SyncEngine extends EventEmitter<SyncEvents> {
     for (const [, doc] of this.docs) {
       doc.destroy();
     }
-
+    for (const [, awareness] of this.awarenesses) {
+      awareness.destroy();
+    }
     this.docs.clear();
     this.persistences.clear();
+    this.awarenesses.clear();
     this.pendingUpdates.clear();
   }
 
@@ -324,7 +378,9 @@ export class SyncEngine extends EventEmitter<SyncEvents> {
           });
         })
         .catch(() => {
-          console.warn(`Peer ${msg.from} failed to upgrade.`);
+          console.warn(
+            `Peer ${msg.from} failed to upgrade. Disconnecting is currently not natively supported in NetworkManager's public API directly from SyncEngine, but we will ignore their updates.`
+          );
         });
 
       return;
@@ -334,7 +390,7 @@ export class SyncEngine extends EventEmitter<SyncEvents> {
       return;
     }
 
-    if (msg.type !== "sync-update") return;
+    if (msg.type !== "sync-update" && msg.type !== "awareness-update") return;
 
     const payload = typeof msg.payload === "string" ? base64ToBytes(msg.payload) : msg.payload;
 
@@ -342,7 +398,11 @@ export class SyncEngine extends EventEmitter<SyncEvents> {
 
     if (decoded === null) return;
 
-    void this.applyRemoteUpdate(decoded.collectionName, decoded.update, msg.from);
+    if (msg.type === "sync-update") {
+      void this.applyRemoteUpdate(decoded.collectionName, decoded.update, msg.from);
+    } else {
+      this.applyRemoteAwarenessUpdate(decoded.collectionName, decoded.update);
+    }
   }
 
   private onPeerConnected(): void {
